@@ -168,10 +168,17 @@ function rlAllow(chat_id, user_id, seconds = 20) {
 }
 
 function ensureGroup(chat) {
-  const g = getGroup.get(chat.id);
+  let g = getGroup.get(chat.id);
   if (!g) {
-    upsertGroup.run({ chat_id: chat.id });
-    return getGroup.get(chat.id);
+    upsertGroup.run({
+      chat_id: chat.id,
+      enabled: 1,
+      threshold: 0.85,
+      check_photo: 1,
+      admins_cache: "[]",
+      admins_refreshed_at: 0
+    });
+    g = getGroup.get(chat.id);
   }
   return g;
 }
