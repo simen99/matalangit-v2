@@ -2,13 +2,15 @@
   "name": "sangmata-plusplugin",
   "version": "1.0.0",
   "main": "index.js",
-  "scripts": { "start": "node index.js" },
+  "scripts": {
+    "start": "node index.js"
+  },
   "dependencies": {
-    "telegraf": "^4.16.3",
     "better-sqlite3": "^9.4.0",
-    "string-similarity": "^4.0.4",
+    "express": "^4.19.2",
     "jimp": "^0.22.12",
     "node-fetch": "^2.6.9",
-    "express": "^4.19.2"
+    "string-similarity": "^4.0.4",
+    "telegraf": "^4.16.3"
   }
 }
