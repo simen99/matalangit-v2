@@ -12,7 +12,7 @@ if (!BOT_TOKEN) {
 
 const DB_PATH = process.env.DB_PATH || "./data.db";
 const DEFAULT_THRESHOLD = 0.85;
-const DEFAULT_COOLDOWN = 15;
+const DEFAULT_COOLDOWN = 10; // ✅ turunkan ke 10 detik
 const ADMIN_PHOTO_DIST = 12;
 
 const bot = new Telegraf(BOT_TOKEN);
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS groups (
   enabled INTEGER NOT NULL DEFAULT 0,
   threshold REAL NOT NULL DEFAULT 0.85,
   check_photo INTEGER NOT NULL DEFAULT 1,
-  alert_cooldown INTEGER NOT NULL DEFAULT 15
+  alert_cooldown INTEGER NOT NULL DEFAULT 10
 );
 CREATE TABLE IF NOT EXISTS users (
   chat_id INTEGER NOT NULL,
@@ -83,8 +83,9 @@ function normName(s) {
   return s.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function similarity(a, b) {
-  return stringSimilarity.compareTwoStrings(normName(a), normName(b));
+function similarityPct(a, b) {
+  const score = stringSimilarity.compareTwoStrings(normName(a), normName(b));
+  return Math.round(score * 100);
 }
 
 async function getPhotoHash(ctx, userId) {
@@ -110,6 +111,10 @@ function phashDistance(a, b) {
   let x = A ^ B, d = 0;
   while (x) { d += Number(x & 1n); x >>= 1n; }
   return d;
+}
+function phashSimilarityPct(a, b) {
+  const d = phashDistance(a, b);
+  return Math.max(0, Math.round(100 - (d / 64 * 100)));
 }
 
 function rlAllow(chat_id, user_id, sec) {
@@ -151,9 +156,9 @@ async function trackAndAlert(ctx, user, chat) {
   let changes = {
     name: "tidak berubah",
     username: "tidak berubah",
-    photo: "tidak berubah",
-    alerts: []
+    photo: "tidak berubah"
   };
+  let alerts = [];
 
   if (!row) {
     upsertUser.run({
@@ -176,13 +181,9 @@ async function trackAndAlert(ctx, user, chat) {
     changes.username = `${row.last_username || "-"} → ${username}`;
   }
   if (photoHash && photoHash !== row.last_photo_hash) {
-    const dist = row.last_photo_hash ? phashDistance(photoHash, row.last_photo_hash) : "?";
-    changes.photo = `Foto profil diperbarui (Δ=${dist})`;
-    if (dist <= ADMIN_PHOTO_DIST) {
-      changes.alerts.push(`🛑 Foto mirip admin (Δ=${dist})`);
-    }
+    changes.photo = "diperbarui";
   } else {
-    changes.photo = "Foto profil: tidak berubah";
+    changes.photo = "tidak berubah";
   }
 
   // update user row
@@ -200,7 +201,7 @@ async function trackAndAlert(ctx, user, chat) {
   if (
     changes.name !== "tidak berubah" ||
     changes.username !== "tidak berubah" ||
-    changes.photo !== "Foto profil: tidak berubah"
+    changes.photo === "diperbarui"
   ) {
     if (!rlAllow(chat.id, user.id, g.alert_cooldown)) return;
 
@@ -208,12 +209,28 @@ async function trackAndAlert(ctx, user, chat) {
     const admins = await ctx.telegram.getChatAdministrators(chat.id);
     for (const a of admins) {
       if (a.user.id === user.id) continue;
-      if (a.user.username && a.user.username.toLowerCase() === username.toLowerCase()) {
-        changes.alerts.push("🚨 Username identik admin");
+
+      // cek nama
+      const nameAdmin = `${a.user.first_name || ""} ${a.user.last_name || ""}`.trim();
+      const simName = similarityPct(displayName, nameAdmin);
+      if (simName >= g.threshold * 100) {
+        alerts.push(`• Nama mirip "${nameAdmin}" (${simName}%)`);
       }
-      const sim = similarity(`${a.user.first_name || ""} ${a.user.last_name || ""}`, displayName);
-      if (sim >= g.threshold) {
-        changes.alerts.push(`⚠️ Nama mirip admin (skor ≈ ${sim.toFixed(2)})`);
+
+      // cek username
+      if (a.user.username && a.user.username.toLowerCase() === username.toLowerCase()) {
+        alerts.push(`• Username identik "@${a.user.username}" (100%)`);
+      }
+
+      // cek foto
+      if (g.check_photo && photoHash) {
+        const adminPhoto = await getPhotoHash(ctx, a.user.id);
+        if (adminPhoto) {
+          const simPhoto = phashSimilarityPct(photoHash, adminPhoto);
+          if (simPhoto >= 100 - (ADMIN_PHOTO_DIST / 64 * 100)) {
+            alerts.push(`• Foto mirip "${nameAdmin || "Admin"}" (${simPhoto}%)`);
+          }
+        }
       }
     }
 
@@ -223,15 +240,15 @@ async function trackAndAlert(ctx, user, chat) {
       "",
       `📝 Nama: ${changes.name}`,
       `🔗 Username: ${changes.username}`,
-      `🖼️ ${changes.photo}`,
+      `🖼️ Foto profil: ${changes.photo}`,
       "",
-      ...(changes.alerts.length ? changes.alerts : []),
+      alerts.length ? `⚠️ Mirip Admin:\n   ${alerts.join("\n   ")}` : "",
       "",
       `🕒 ${ts()} WIB`,
       "━━━━━━━━━━━━━━━━━━"
     ].join("\n");
 
-    await ctx.telegram.sendMessage(chat.id, text, { parse_mode: "HTML" });
+    await ctx.telegram.sendMessage(chat.id, text.trim(), { parse_mode: "HTML" });
   }
 }
 
