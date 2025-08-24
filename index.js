@@ -88,6 +88,16 @@ function similarityPct(a, b) {
   return Math.round(score * 100);
 }
 
+// ✅ Tambahkan di sini
+async function isAdmin(ctx) {
+  try {
+    const member = await ctx.telegram.getChatMember(ctx.chat.id, ctx.from.id);
+    return ["creator", "administrator"].includes(member.status);
+  } catch {
+    return false;
+  }
+}
+
 async function getPhotoHash(ctx, userId) {
   try {
     const photos = await ctx.telegram.getUserProfilePhotos(userId, 0, 1);
@@ -253,59 +263,71 @@ async function trackAndAlert(ctx, user, chat) {
 }
 
 // ---------- Commands ----------
-bot.command("aktif", (ctx) => {
+bot.command("aktif", async (ctx) => {
   if (!ctx.chat) return;
+  if (!(await isAdmin(ctx))) {
+    return ctx.reply("❌ Hanya admin grup yang bisa menjalankan perintah ini.");
+  }
+
   const g = ensureGroup(ctx.chat);
   upsertGroup.run({
     chat_id: ctx.chat.id,
     enabled: 1,
     threshold: g.threshold,
     check_photo: g.check_photo,
-    alert_cooldown: g.alert_cooldown
+    alert_cooldown: g.alert_cooldown || DEFAULT_COOLDOWN,
   });
-  ctx.reply(
+
+  const gg = getGroup.get(ctx.chat.id); // ambil nilai terbaru
+  return ctx.reply(
     [
       "━━━━━━━━━━━━━━━━━━",
       `✅ Bot Aktif di grup: ${ctx.chat.title}`,
       "",
       "📊 Konfigurasi:",
-      `• Ambang mirip admin : ${g.threshold}`,
-      `• Cek foto profil    : ${g.check_photo ? "ON" : "OFF"}`,
-      `• Cooldown alert      : ${g.alert_cooldown}s`,
+      `• Ambang mirip admin : ${gg.threshold}`,
+      `• Cek foto profil    : ${gg.check_photo ? "ON" : "OFF"}`,
+      `• Cooldown alert      : ${gg.alert_cooldown}s`,
       `• Ambang foto admin   : Δ≤${ADMIN_PHOTO_DIST}`,
       "",
       "ℹ️ Bot memantau perubahan identitas & anti-cloner admin.",
       `🕒 ${ts()} WIB`,
-      "━━━━━━━━━━━━━━━━━━"
+      "━━━━━━━━━━━━━━━━━━",
     ].join("\n"),
     { parse_mode: "HTML" }
   );
 });
 
-bot.command("nonaktif", (ctx) => {
+bot.command("nonaktif", async (ctx) => {
   if (!ctx.chat) return;
+  if (!(await isAdmin(ctx))) {
+    return ctx.reply("❌ Hanya admin grup yang bisa menjalankan perintah ini.");
+  }
+
   const g = ensureGroup(ctx.chat);
   upsertGroup.run({
     chat_id: ctx.chat.id,
     enabled: 0,
     threshold: g.threshold,
     check_photo: g.check_photo,
-    alert_cooldown: g.alert_cooldown
+    alert_cooldown: g.alert_cooldown || DEFAULT_COOLDOWN,
   });
-  ctx.reply(
+
+  const gg = getGroup.get(ctx.chat.id); // ambil nilai terbaru
+  return ctx.reply(
     [
       "━━━━━━━━━━━━━━━━━━",
       `⛔ Bot Nonaktif di grup: ${ctx.chat.title}`,
       "",
       "📊 Konfigurasi:",
-      `• Ambang mirip admin : ${g.threshold}`,
-      `• Cek foto profil    : ${g.check_photo ? "ON" : "OFF"}`,
-      `• Cooldown alert      : ${g.alert_cooldown}s`,
+      `• Ambang mirip admin : ${gg.threshold}`,
+      `• Cek foto profil    : ${gg.check_photo ? "ON" : "OFF"}`,
+      `• Cooldown alert      : ${gg.alert_cooldown}s`,
       `• Ambang foto admin   : Δ≤${ADMIN_PHOTO_DIST}`,
       "",
       "ℹ️ Bot berhenti memantau identitas.",
       `🕒 ${ts()} WIB`,
-      "━━━━━━━━━━━━━━━━━━"
+      "━━━━━━━━━━━━━━━━━━",
     ].join("\n"),
     { parse_mode: "HTML" }
   );
