@@ -1,9 +1,10 @@
+// index.js
 const { Telegraf } = require("telegraf");
 const Database = require("better-sqlite3");
 const stringSimilarity = require("string-similarity");
 const Jimp = require("jimp");
 const fetch = require("node-fetch");
-const express = require("express"); // <— webhook server
+const express = require("express");
 
 // ====== ENV ======
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -11,15 +12,16 @@ if (!BOT_TOKEN) {
   console.error("❌ Missing BOT_TOKEN env.");
   process.exit(1);
 }
-const WEBHOOK_URL = process.env.WEBHOOK_URL; // e.g. https://your-app.up.railway.app
-const SECRET_PATH = process.env.SECRET_PATH || "/tg"; // e.g. /tg-8b2a
+const WEBHOOK_URL   = process.env.WEBHOOK_URL;             // e.g. https://your-app.up.railway.app
+const SECRET_PATH   = process.env.SECRET_PATH || "/tg";     // e.g. /tg-8b2a
+const PORT          = process.env.PORT || 3000;
 
-const DB_PATH = process.env.DB_PATH || "./data.db";
-const DEFAULT_THRESHOLD = 0.85;
-const DEFAULT_COOLDOWN = 0;
-const DEFAULT_ENABLED  = 1;      // auto aktif
-const DEFAULT_CHECK_PHOTO = 1;
-const ADMIN_PHOTO_DIST = 12;
+const DB_PATH            = process.env.DB_PATH || "./data.db";
+const DEFAULT_THRESHOLD  = 0.85;
+const DEFAULT_COOLDOWN   = 0;      // set 10 jika mau jeda alert
+const DEFAULT_ENABLED    = 1;      // auto aktif saat baru diundang
+const DEFAULT_CHECK_PHOTO= 1;      // 1=ON, 0=OFF
+const ADMIN_PHOTO_DIST   = 12;
 
 const bot = new Telegraf(BOT_TOKEN);
 
@@ -103,7 +105,7 @@ async function getPhotoHash(ctx, userId) {
     if (!res) return null;
     const buf  = await res.buffer();
     const img  = await Jimp.read(buf);
-    img.resize(64,64); // cepat
+    img.resize(64,64); // lebih cepat
     return img.hash(2);
   } catch { return null; }
 }
@@ -146,7 +148,7 @@ async function getAdminsCached(ctx, chatId){
     id: a.user.id,
     name: `${a.user.first_name||""} ${a.user.last_name||""}`.trim(),
     username: a.user.username || "",
-    pHash: undefined
+    pHash: undefined // diisi saat diperlukan
   }));
   ADMIN_CACHE.set(chatId, { ts: t, list });
   return list;
@@ -253,23 +255,13 @@ async function trackAndAlert(ctx, user, chat){
   await ctx.telegram.sendMessage(chat.id, text.trim(), { parse_mode: "HTML" });
 }
 
-// ====== Command /aktif ======
+// ====== Commands ======
 bot.command("aktif", async (ctx)=>{
   if (!ctx.chat) return;
-  if (!(await isAdmin(ctx))) {
-    return ctx.reply("❌ Hanya admin grup yang bisa menjalankan perintah ini.");
-  }
-
+  if (!(await isAdmin(ctx))) return ctx.reply("❌ Hanya admin grup yang bisa menjalankan perintah ini.");
   const g = ensureGroup(ctx.chat);
-  upsertGroup.run({
-    chat_id: ctx.chat.id,
-    enabled: 1,
-    threshold: g.threshold,
-    check_photo: g.check_photo,
-    alert_cooldown: g.alert_cooldown
-  });
+  upsertGroup.run({ chat_id: ctx.chat.id, enabled: 1, threshold: g.threshold, check_photo: g.check_photo, alert_cooldown: g.alert_cooldown });
   const gg = getGroup.get(ctx.chat.id);
-
   return ctx.reply(
     [
       "━━━━━━━━━━━━━━━━━━",
@@ -289,7 +281,6 @@ bot.command("aktif", async (ctx)=>{
   );
 });
 
-// ====== Commands (opsional) ======
 bot.command("nonaktif", async (ctx)=>{
   if (!ctx.chat) return;
   if (!(await isAdmin(ctx))) return ctx.reply("❌ Hanya admin grup yang bisa menjalankan perintah ini.");
@@ -314,7 +305,7 @@ bot.command("nonaktif", async (ctx)=>{
   );
 });
 
-// Auto-enable ketika bot jadi member/admin
+// Auto-enable jika jadi member/admin
 bot.on("my_chat_member", (ctx)=>{
   const st = ctx.update.my_chat_member?.new_chat_member?.status;
   if (!ctx.chat || !["group","supergroup"].includes(ctx.chat.type)) return;
@@ -348,19 +339,19 @@ bot.on("chat_member", (ctx)=>{
     process.exit(1);
   }
   const app = express();
-  const PORT = process.env.PORT || 3000;
 
-  // URL webhook final (BASE + SECRET_PATH)
   const hookUrl = WEBHOOK_URL.replace(/\/+$/, "") + SECRET_PATH;
+  try {
+    await bot.telegram.setWebhook(hookUrl);
+  } catch (e) {
+    console.error("❌ setWebhook gagal:", e?.message || e);
+    process.exit(1);
+  }
 
-  // set webhook ke Telegram (aman dipanggil berulang pada tiap instance)
-  await bot.telegram.setWebhook(hookUrl);
-
-  // terima update Telegram
   app.use(bot.webhookCallback(SECRET_PATH));
 
-  // healthcheck
-  app.get("/", (_req, res) => res.send("OK"));
+  // Healthcheck untuk Railway
+  app.get("/", (_req, res) => res.status(200).send("OK"));
 
   app.listen(PORT, () => {
     console.log("🚀 Bot via WEBHOOK on", hookUrl, "DB:", DB_PATH);
