@@ -1,16 +1,14 @@
 {
-  "name": "sangmata-plusplus",
+  "name": "sangmata-plusplugin",
   "version": "1.0.0",
-  "description": "Advanced identity watcher bot for Telegram groups",
   "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
+  "scripts": { "start": "node index.js" },
   "dependencies": {
-    "better-sqlite3": "^9.0.0",
-    "jimp": "^0.22.10",
-    "node-fetch": "^2.7.0",
+    "telegraf": "^4.16.3",
+    "better-sqlite3": "^9.4.0",
     "string-similarity": "^4.0.4",
-    "telegraf": "^4.15.0"
+    "jimp": "^0.22.12",
+    "node-fetch": "^2.6.9",
+    "express": "^4.19.2"
   }
 }
