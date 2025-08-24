@@ -184,7 +184,7 @@ async function getFirstPhotoHashByUserId(ctx, userId) {
     const res = await fetch(url);
     const buf = await res.buffer();
     const img = await Jimp.read(buf);
-    return img.hash(); // pHash hex
+    return img.hash(2); // paksa hex, base 16
   } catch {
     return null;
   }
