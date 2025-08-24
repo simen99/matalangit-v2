@@ -369,7 +369,14 @@ bot.on("chat_member", (ctx)=>{
     .then(info => console.log("ℹ️ WebhookInfo:", info))
     .catch(e => console.error("getWebhookInfo error:", e?.message || e));
 
-  app.listen(PORT, () => {
+    app.listen(PORT, () => {
     console.log("🚀 Bot via WEBHOOK on", hookUrl, "DB:", DB_PATH);
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    console.error("❌ Unhandled Rejection:", reason);
+  });
+  process.on("uncaughtException", (err) => {
+    console.error("❌ Uncaught Exception:", err);
   });
 })();
