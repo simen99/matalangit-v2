@@ -353,7 +353,7 @@ bot.on("chat_member", (ctx)=>{
 
   const hookUrl = WEBHOOK_URL.replace(/\/+$/, "") + SECRET_PATH;
   await bot.telegram.setWebhook(hookUrl, {
-    drop_pending_updates: false,
+    drop_pending_updates: true,
     allowed_updates: ["message", "edited_message", "chat_member", "my_chat_member"]
   });
 
