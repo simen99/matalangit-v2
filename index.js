@@ -12,7 +12,7 @@ if (!BOT_TOKEN) {
 
 const DB_PATH = process.env.DB_PATH || "./data.db";
 const DEFAULT_THRESHOLD = 0.85;
-const DEFAULT_COOLDOWN = 0; // ✅ turunkan ke 10 detik
+const DEFAULT_COOLDOWN = 0; // set 10 kalau mau jeda alert default
 const ADMIN_PHOTO_DIST = 12;
 
 const bot = new Telegraf(BOT_TOKEN);
@@ -82,13 +82,11 @@ function normName(s) {
   if (!s) return "";
   return s.toLowerCase().replace(/\s+/g, " ").trim();
 }
-
 function similarityPct(a, b) {
   const score = stringSimilarity.compareTwoStrings(normName(a), normName(b));
   return Math.round(score * 100);
 }
 
-// ✅ Tambahkan di sini
 async function isAdmin(ctx) {
   try {
     const member = await ctx.telegram.getChatMember(ctx.chat.id, ctx.from.id);
@@ -98,6 +96,7 @@ async function isAdmin(ctx) {
   }
 }
 
+// --- pHash utils ---
 async function getPhotoHash(ctx, userId) {
   try {
     const photos = await ctx.telegram.getUserProfilePhotos(userId, 0, 1);
@@ -105,15 +104,17 @@ async function getPhotoHash(ctx, userId) {
     const fileId = photos.photos[0][0].file_id;
     const file = await ctx.telegram.getFile(fileId);
     const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
-    const res = await fetch(url);
+    const res = await fetch(url, { timeout: 8000 }).catch(() => null);
+    if (!res) return null;
     const buf = await res.buffer();
     const img = await Jimp.read(buf);
+    // kecilkan dulu biar hashing cepat (tanpa ubah logika hasil secara signifikan)
+    img.resize(64, 64);
     return img.hash(2);
   } catch {
     return null;
   }
 }
-
 function phashDistance(a, b) {
   if (!a || !b) return 64;
   const A = BigInt("0x" + a);
@@ -134,7 +135,7 @@ function rlAllow(chat_id, user_id, sec) {
     setRL.run(chat_id, user_id, t);
     return true;
   }
-  return true; // ✅ tidak ada lagi rate limit
+  return true; // tetap no rate limit sesuai logika lama
 }
 
 function ensureGroup(chat) {
@@ -152,6 +153,44 @@ function ensureGroup(chat) {
   return g;
 }
 
+// ---------- Admin Cache (baru) ----------
+/**
+ * Struktur:
+ * ADMIN_CACHE: Map<chatId, { ts, list: Array<{id, name, username, pHash?: string|null}> }>
+ */
+const ADMIN_CACHE = new Map();
+const ADMIN_CACHE_TTL = 300; // 5 menit
+
+async function getAdminsCached(ctx, chatId) {
+  const t = now();
+  const c = ADMIN_CACHE.get(chatId);
+  if (c && (t - c.ts) < ADMIN_CACHE_TTL) return c.list;
+
+  const raw = await ctx.telegram.getChatAdministrators(chatId);
+  const list = raw.map(a => ({
+    id: a.user.id,
+    name: `${a.user.first_name || ""} ${a.user.last_name || ""}`.trim(),
+    username: a.user.username || "",
+    pHash: undefined // diisi on-demand
+  }));
+  ADMIN_CACHE.set(chatId, { ts: t, list });
+  return list;
+}
+
+async function ensureAdminPHash(ctx, chatId, adminObj) {
+  // kalau sudah pernah dihitung (null atau string), jangan hitung lagi
+  if (adminObj.pHash !== undefined) return adminObj.pHash;
+  const h = await getPhotoHash(ctx, adminObj.id);
+  adminObj.pHash = h || null;
+  // simpan balik ke cache
+  const c = ADMIN_CACHE.get(chatId);
+  if (c) {
+    const idx = c.list.findIndex(x => x.id === adminObj.id);
+    if (idx >= 0) c.list[idx] = adminObj;
+  }
+  return adminObj.pHash;
+}
+
 // ---------- Tracking ----------
 async function trackAndAlert(ctx, user, chat) {
   const g = ensureGroup(chat);
@@ -160,14 +199,12 @@ async function trackAndAlert(ctx, user, chat) {
   const row = getUser.get(chat.id, user.id);
   const displayName = `${user.first_name || ""} ${user.last_name || ""}`.trim();
   const username = user.username || "-";
-  const photoHash = g.check_photo ? await getPhotoHash(ctx, user.id) : null;
   const t = now();
 
-  let changes = {
-    name: "tidak berubah",
-    username: "tidak berubah",
-    photo: "tidak berubah"
-  };
+  // hitung foto user hanya sekali di sini (opsional aktif)
+  const photoHash = g.check_photo ? await getPhotoHash(ctx, user.id) : null;
+
+  let changes = { name: "tidak berubah", username: "tidak berubah", photo: "tidak berubah" };
   let alerts = [];
 
   if (!row) {
@@ -208,58 +245,64 @@ async function trackAndAlert(ctx, user, chat) {
   });
 
   // only alert if ada perubahan
-  if (
+  const hasChange =
     changes.name !== "tidak berubah" ||
     changes.username !== "tidak berubah" ||
-    changes.photo === "diperbarui"
-  ) {
-    if (!rlAllow(chat.id, user.id, g.alert_cooldown)) return;
+    changes.photo === "diperbarui";
 
-    // cek kemiripan admin
-    const admins = await ctx.telegram.getChatAdministrators(chat.id);
-    for (const a of admins) {
-      if (a.user.id === user.id) continue;
+  if (!hasChange) return;
+  if (!rlAllow(chat.id, user.id, g.alert_cooldown)) return;
 
-      // cek nama
-      const nameAdmin = `${a.user.first_name || ""} ${a.user.last_name || ""}`.trim();
-      const simName = similarityPct(displayName, nameAdmin);
-      if (simName >= g.threshold * 100) {
-        alerts.push(`• Nama mirip "${nameAdmin}" (${simName}%)`);
-      }
+  // ---------- Cek kemiripan admin (versi cepat) ----------
+  const admins = await getAdminsCached(ctx, chat.id);
 
-      // cek username
-      if (a.user.username && a.user.username.toLowerCase() === username.toLowerCase()) {
-        alerts.push(`• Username identik "@${a.user.username}" (100%)`);
-      }
+  // 1) Cek nama & username (super cepat, tanpa I/O)
+  const susAdmins = [];
+  for (const a of admins) {
+    if (a.id === user.id) continue;
 
-      // cek foto
-      if (g.check_photo && photoHash) {
-        const adminPhoto = await getPhotoHash(ctx, a.user.id);
-        if (adminPhoto) {
-          const simPhoto = phashSimilarityPct(photoHash, adminPhoto);
-          if (simPhoto >= 100 - (ADMIN_PHOTO_DIST / 64 * 100)) {
-            alerts.push(`• Foto mirip "${nameAdmin || "Admin"}" (${simPhoto}%)`);
-          }
-        }
-      }
+    const simName = similarityPct(displayName, a.name);
+    const userMatch = a.username && username !== "-" && a.username.toLowerCase() === username.toLowerCase();
+
+    if (simName >= g.threshold * 100) {
+      alerts.push(`• Nama mirip "${a.name}" (${simName}%)`);
+      susAdmins.push(a); // kandidat untuk cek foto
+    } else if (userMatch) {
+      alerts.push(`• Username identik "@${a.username}" (100%)`);
+      susAdmins.push(a);
     }
-
-    const text = [
-      "━━━━━━━━━━━━━━━━━━",
-      `👤 ${displayName || "-"} | ${user.id} | ${username !== "-" ? "@" + username : "-"}`,
-      "",
-      `📝 Nama: ${changes.name}`,
-      `🔗 Username: ${changes.username}`,
-      `🖼️ Foto profil: ${changes.photo}`,
-      "",
-      alerts.length ? `⚠️ Mirip Admin:\n   ${alerts.join("\n   ")}` : "",
-      "",
-      `🕒 ${ts()} WIB`,
-      "━━━━━━━━━━━━━━━━━━"
-    ].join("\n");
-
-    await ctx.telegram.sendMessage(chat.id, text.trim(), { parse_mode: "HTML" });
   }
+
+  // 2) Cek foto (BERAT) hanya untuk kandidat yang sudah mencurigakan
+  if (g.check_photo && photoHash && susAdmins.length) {
+    // hitung pHash admin yang belum punya pHash di cache (paralel)
+    await Promise.all(
+      susAdmins.map(async (a) => {
+        const ap = await ensureAdminPHash(ctx, chat.id, a);
+        if (!ap) return;
+        const simPhoto = phashSimilarityPct(photoHash, ap);
+        if (simPhoto >= 100 - (ADMIN_PHOTO_DIST / 64 * 100)) {
+          alerts.push(`• Foto mirip "${a.name || "Admin"}" (${simPhoto}%)`);
+        }
+      })
+    );
+  }
+
+  const text = [
+    "━━━━━━━━━━━━━━━━━━",
+    `👤 ${displayName || "-"} | ${user.id} | ${username !== "-" ? "@" + username : "-"}`,
+    "",
+    `📝 Nama: ${changes.name}`,
+    `🔗 Username: ${changes.username}`,
+    `🖼️ Foto profil: ${changes.photo}`,
+    "",
+    alerts.length ? `⚠️ Mirip Admin:\n   ${alerts.join("\n   ")}` : "",
+    "",
+    `🕒 ${ts()} WIB`,
+    "━━━━━━━━━━━━━━━━━━"
+  ].join("\n");
+
+  await ctx.telegram.sendMessage(chat.id, text.trim(), { parse_mode: "HTML" });
 }
 
 // ---------- Commands ----------
@@ -278,7 +321,7 @@ bot.command("aktif", async (ctx) => {
     alert_cooldown: g.alert_cooldown || DEFAULT_COOLDOWN,
   });
 
-  const gg = getGroup.get(ctx.chat.id); // ambil nilai terbaru
+  const gg = getGroup.get(ctx.chat.id);
   return ctx.reply(
     [
       "━━━━━━━━━━━━━━━━━━",
@@ -313,7 +356,7 @@ bot.command("nonaktif", async (ctx) => {
     alert_cooldown: g.alert_cooldown || DEFAULT_COOLDOWN,
   });
 
-  const gg = getGroup.get(ctx.chat.id); // ambil nilai terbaru
+  const gg = getGroup.get(ctx.chat.id);
   return ctx.reply(
     [
       "━━━━━━━━━━━━━━━━━━",
