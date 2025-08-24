@@ -25,6 +25,10 @@ const ADMIN_PHOTO_DIST   = 12;
 
 const bot = new Telegraf(BOT_TOKEN);
 
+bot.catch(err => {
+  console.error("🔥 Bot error:", err?.description || err?.message || err);
+});
+
 // ====== DB ======
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
@@ -143,16 +147,23 @@ async function getAdminsCached(ctx, chatId){
   const c = ADMIN_CACHE.get(chatId);
   if (c && (t - c.ts) < ADMIN_CACHE_TTL) return c.list;
 
-  const raw = await ctx.telegram.getChatAdministrators(chatId);
-  const list = raw.map(a => ({
-    id: a.user.id,
-    name: `${a.user.first_name||""} ${a.user.last_name||""}`.trim(),
-    username: a.user.username || "",
-    pHash: undefined // diisi saat diperlukan
-  }));
+  let list = [];
+  try {
+    const raw = await ctx.telegram.getChatAdministrators(chatId);
+    list = raw.map(a => ({
+      id: a.user.id,
+      name: `${a.user.first_name||""} ${a.user.last_name||""}`.trim(),
+      username: a.user.username || "",
+      pHash: undefined
+    }));
+  } catch (e) {
+    console.warn("⚠️ getChatAdministrators gagal (bot bukan admin?):", e?.message || e);
+  }
+
   ADMIN_CACHE.set(chatId, { ts: t, list });
   return list;
 }
+
 async function ensureAdminPHash(ctx, chatId, admin){
   if (admin.pHash !== undefined) return admin.pHash;
   const h = await getPhotoHash(ctx, admin.id);
@@ -341,19 +352,24 @@ bot.on("chat_member", (ctx)=>{
   const app = express();
 
   const hookUrl = WEBHOOK_URL.replace(/\/+$/, "") + SECRET_PATH;
-  try {
-    await bot.telegram.setWebhook(hookUrl);
-  } catch (e) {
-    console.error("❌ setWebhook gagal:", e?.message || e);
-    process.exit(1);
-  }
+  await bot.telegram.setWebhook(hookUrl, {
+    drop_pending_updates: false,
+    allowed_updates: ["message", "edited_message", "chat_member", "my_chat_member"]
+  });
 
-  app.use(bot.webhookCallback(SECRET_PATH));
+  // === ⬇⬇ Tempel blok ini di SINI (setelah setWebhook) ⬇⬇ ===
+  const webhookPath = SECRET_PATH;             // mis. "/tg-8b2a"
+  app.use(bot.webhookCallback(webhookPath));
 
-  // Healthcheck untuk Railway
+  // healthcheck untuk Railway
   app.get("/", (_req, res) => res.status(200).send("OK"));
+
+  // optional: log info webhook supaya kelihatan di Deploy Logs
+  bot.telegram.getWebhookInfo()
+    .then(info => console.log("ℹ️ WebhookInfo:", info))
+    .catch(e => console.error("getWebhookInfo error:", e?.message || e));
 
   app.listen(PORT, () => {
     console.log("🚀 Bot via WEBHOOK on", hookUrl, "DB:", DB_PATH);
   });
-})();
+})(); // === ⬆⬆ Sampai sebelum ini ⬆⬆ ===
