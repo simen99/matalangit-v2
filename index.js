@@ -253,6 +253,42 @@ async function trackAndAlert(ctx, user, chat){
   await ctx.telegram.sendMessage(chat.id, text.trim(), { parse_mode: "HTML" });
 }
 
+// ====== Command /aktif ======
+bot.command("aktif", async (ctx)=>{
+  if (!ctx.chat) return;
+  if (!(await isAdmin(ctx))) {
+    return ctx.reply("❌ Hanya admin grup yang bisa menjalankan perintah ini.");
+  }
+
+  const g = ensureGroup(ctx.chat);
+  upsertGroup.run({
+    chat_id: ctx.chat.id,
+    enabled: 1,
+    threshold: g.threshold,
+    check_photo: g.check_photo,
+    alert_cooldown: g.alert_cooldown
+  });
+  const gg = getGroup.get(ctx.chat.id);
+
+  return ctx.reply(
+    [
+      "━━━━━━━━━━━━━━━━━━",
+      `✅ Bot Aktif di grup: ${ctx.chat.title}`,
+      "",
+      "📊 Konfigurasi:",
+      `• Ambang mirip admin : ${gg.threshold}`,
+      `• Cek foto profil    : ${gg.check_photo ? "ON" : "OFF"}`,
+      `• Cooldown alert      : ${gg.alert_cooldown}s`,
+      `• Ambang foto admin   : Δ≤${ADMIN_PHOTO_DIST}`,
+      "",
+      "ℹ️ Bot kembali memantau perubahan identitas & anti-cloner admin.",
+      `🕒 ${ts()} WIB`,
+      "━━━━━━━━━━━━━━━━━━",
+    ].join("\n"),
+    { parse_mode: "HTML" }
+  );
+});
+
 // ====== Commands (opsional) ======
 bot.command("nonaktif", async (ctx)=>{
   if (!ctx.chat) return;
