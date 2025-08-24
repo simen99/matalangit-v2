@@ -12,7 +12,7 @@ if (!BOT_TOKEN) {
 
 const DB_PATH = process.env.DB_PATH || "./data.db";
 const DEFAULT_THRESHOLD = 0.85;
-const DEFAULT_COOLDOWN = 10; // ✅ turunkan ke 10 detik
+const DEFAULT_COOLDOWN = 0; // ✅ turunkan ke 10 detik
 const ADMIN_PHOTO_DIST = 12;
 
 const bot = new Telegraf(BOT_TOKEN);
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS groups (
   enabled INTEGER NOT NULL DEFAULT 0,
   threshold REAL NOT NULL DEFAULT 0.85,
   check_photo INTEGER NOT NULL DEFAULT 1,
-  alert_cooldown INTEGER NOT NULL DEFAULT 10
+  alert_cooldown INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS users (
   chat_id INTEGER NOT NULL,
@@ -134,7 +134,7 @@ function rlAllow(chat_id, user_id, sec) {
     setRL.run(chat_id, user_id, t);
     return true;
   }
-  return false;
+  return true; // ✅ tidak ada lagi rate limit
 }
 
 function ensureGroup(chat) {
