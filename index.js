@@ -372,4 +372,4 @@ bot.on("chat_member", (ctx)=>{
   app.listen(PORT, () => {
     console.log("🚀 Bot via WEBHOOK on", hookUrl, "DB:", DB_PATH);
   });
-})(); // === ⬆⬆ Sampai sebelum ini ⬆⬆ ===
+})();
